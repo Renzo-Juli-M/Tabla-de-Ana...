@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Interfaz gráfica para tablas de frecuencias (datos agrupados).
-Funciona con Tkinter (incluido en Python). Gráficos opcionales con matplotlib.
+Interfaz gráfica (Tkinter) para tablas de frecuencias de datos agrupados.
+Incluye:
+- Tabla con: Intervalo, Amplitud A, fi, hi, Fi, Hi
+- Medidas de posición (media, mediana, moda, Q1-Q3)
+- Medidas de dispersión (rango, var, sd, IQR, CV)
+- Cálculo general de Cuartiles Qk, Deciles Dk y Percentiles Pk
+- Exportación a CSV
+- Gráficas (fi y ojiva Fi) si hay matplotlib
 
-Autor: tú + ChatGPT :)
+Autor: tú + ChatGPT
 """
 
 from dataclasses import dataclass
@@ -13,7 +19,7 @@ import csv
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-# ---- matplotlib (opcional) ----
+# --- Gráficos (opcional) ---
 HAS_MPL = False
 try:
     import matplotlib.pyplot as plt  # pip install matplotlib
@@ -42,11 +48,17 @@ class Clase:
 # ===================== CÁLCULOS =====================
 
 def construir_tabla(clases: List[Clase]) -> Tuple[List[dict], int]:
+    """Devuelve filas con fi, hi, Fi, Hi."""
     filas = []
     n = sum(c.fi for c in clases)
+    if n == 0:
+        return filas, 0
     Fi = 0
+    Hi = 0.0
     for i, c in enumerate(clases):
         Fi += c.fi
+        hi = c.fi / n
+        Hi += hi
         etiqueta = f"[ {c.minimo:g} , {c.maximo:g} " + ("]" if i == len(clases)-1 else "[")
         filas.append({
             "intervalo": etiqueta,
@@ -54,7 +66,9 @@ def construir_tabla(clases: List[Clase]) -> Tuple[List[dict], int]:
             "max": c.maximo,
             "A": c.amplitud,
             "fi": c.fi,
-            "Fi": Fi
+            "hi": hi,
+            "Fi": Fi,
+            "Hi": Hi
         })
     return filas, n
 
@@ -67,6 +81,7 @@ def media_agrupada(clases: List[Clase]) -> float:
 
 
 def buscar_clase_por_posicion(clases: List[Clase], posicion: float) -> Tuple[int, int]:
+    """Retorna (índice, Fi_prev) para una posición acumulada."""
     Fi = 0
     for i, c in enumerate(clases):
         previo = Fi
@@ -76,9 +91,18 @@ def buscar_clase_por_posicion(clases: List[Clase], posicion: float) -> Tuple[int
     return len(clases)-1, Fi - clases[-1].fi
 
 
-def cuantil_agrupado(clases: List[Clase], k: int, m: int = 4) -> float:
+def cuantil_agrupado(clases: List[Clase], k: int, m: int) -> float:
+    """
+    Cuantil general (k de m): 
+    L_i + ((k*N/m - F_{i-1}) / f_i) * A
+    - Cuartil: m=4 (k=1..3)
+    - Decil : m=10 (k=1..9)
+    - Percentil: m=100 (k=1..99)
+    """
     n = sum(c.fi for c in clases)
     if n == 0:
+        return float("nan")
+    if not (1 <= k < m):
         return float("nan")
     pos = k * n / m
     i, Fi_1 = buscar_clase_por_posicion(clases, pos)
@@ -87,7 +111,7 @@ def cuantil_agrupado(clases: List[Clase], k: int, m: int = 4) -> float:
 
 
 def mediana_agrupada(clases: List[Clase]) -> float:
-    return cuantil_agrupado(clases, 2, 4)
+    return cuantil_agrupado(clases, 2, 4)  # Q2
 
 
 def moda_agrupada(clases: List[Clase]) -> Optional[float]:
@@ -129,15 +153,39 @@ def dispersion_agrupada(clases: List[Clase]) -> dict:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Sistema de Frecuencias - Sprint 1")
-        self.geometry("980x600")
-        self.minsize(880, 520)
+        self.title("Sistema de Frecuencias · Sprint 1")
+        self.geometry("1060x640")
+        self.minsize(960, 560)
+
+        # Estilo "bonito"
+        self._setup_style()
 
         self.clases: List[Clase] = []
 
         self._crear_widgets()
         self._configurar_layout()
         self._refrescar_tabla()
+
+    # ---- Estética ----
+    def _setup_style(self):
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass  # usar el que haya
+
+        base_bg = "#f6f7fb"
+        accent = "#3b82f6"   # azul
+        style.configure(".", font=("Segoe UI", 10))
+        style.configure("TLabel", background=base_bg)
+        style.configure("TFrame", background=base_bg)
+        style.configure("TLabelframe", background=base_bg, padding=10)
+        style.configure("TLabelframe.Label", font=("Segoe UI Semibold", 11))
+        style.configure("TButton", padding=6)
+        style.map("TButton",
+                  foreground=[("active", "white")],
+                  background=[("active", accent)])
+        self.configure(bg=base_bg)
 
     # ---- UI ----
     def _crear_widgets(self):
@@ -147,58 +195,79 @@ class App(tk.Tk):
         self.var_max = tk.StringVar()
         self.var_fi  = tk.StringVar()
 
-        self.e_min = ttk.Entry(self.frame_in, width=12, textvariable=self.var_min)
-        self.e_max = ttk.Entry(self.frame_in, width=12, textvariable=self.var_max)
-        self.e_fi  = ttk.Entry(self.frame_in, width=12, textvariable=self.var_fi)
+        self.e_min = ttk.Entry(self.frame_in, width=14, textvariable=self.var_min)
+        self.e_max = ttk.Entry(self.frame_in, width=14, textvariable=self.var_max)
+        self.e_fi  = ttk.Entry(self.frame_in, width=14, textvariable=self.var_fi)
 
         self.btn_add = ttk.Button(self.frame_in, text="Agregar / Actualizar", command=self._agregar_clase)
-        self.btn_clear = ttk.Button(self.frame_in, text="Limpiar campos", command=self._limpiar_campos)
+        self.btn_clear = ttk.Button(self.frame_in, text="Limpiar", command=self._limpiar_campos)
 
         # Tabla
         self.frame_tabla = ttk.LabelFrame(self, text="Tabla de frecuencias")
-        cols = ("intervalo", "min", "max", "A", "fi", "Fi")
-        self.tree = ttk.Treeview(self.frame_tabla, columns=cols, show="headings", height=10)
+        cols = ("intervalo", "min", "max", "A", "fi", "hi", "Fi", "Hi")
+        self.tree = ttk.Treeview(self.frame_tabla, columns=cols, show="headings", height=12)
         headings = {
             "intervalo": "Valores (Intervalo)",
             "min": "Mín",
             "max": "Máx",
             "A": "A",
             "fi": "fi",
-            "Fi": "Fi"
+            "hi": "hi",
+            "Fi": "Fi",
+            "Hi": "Hi"
         }
         for c in cols:
             self.tree.heading(c, text=headings[c])
-            self.tree.column(c, width=120 if c == "intervalo" else 80, anchor="center")
+            w = 160 if c == "intervalo" else 90
+            self.tree.column(c, width=w, anchor="center")
         self.tree.bind("<<TreeviewSelect>>", self._cargar_desde_tabla)
 
-        self.btn_del = ttk.Button(self.frame_tabla, text="Eliminar selección", command=self._eliminar_seleccion)
+        self.btn_del = ttk.Button(self.frame_tabla, text="Eliminar fila", command=self._eliminar_seleccion)
         self.btn_csv = ttk.Button(self.frame_tabla, text="Exportar CSV", command=self._exportar_csv)
 
-        # Acciones/Resultados
-        self.frame_ops = ttk.LabelFrame(self, text="Cálculos y Visualización")
+        # Cálculos / Visual
+        self.frame_ops = ttk.LabelFrame(self, text="Cálculos y visualización")
         self.btn_tabla = ttk.Button(self.frame_ops, text="Recalcular tabla", command=self._refrescar_tabla)
         self.btn_pos = ttk.Button(self.frame_ops, text="Medidas de posición", command=self._mostrar_posicion)
         self.btn_disp = ttk.Button(self.frame_ops, text="Medidas de dispersión", command=self._mostrar_dispersion)
-        self.btn_plot = ttk.Button(self.frame_ops, text="Graficar (fi y ojiva)", command=self._graficar)
-        if not HAS_MPL:
-            self.btn_plot.configure(state="disabled")
-            self.btn_plot.configure(text="Graficar (instala matplotlib)")
 
-        self.txt_res = tk.Text(self.frame_ops, height=10, wrap="word")
-        self.txt_res.configure(state="disabled")
+        self.btn_plot = ttk.Button(self.frame_ops, text=("Graficar (fi y ojiva)" if HAS_MPL else "Graficar (instala matplotlib)"),
+                                   command=self._graficar)
+        if not HAS_MPL:
+            self.btn_plot.state(["disabled"])
+
+        # Cuantiles generales
+        self.frame_q = ttk.LabelFrame(self, text="Cuantiles (Qk, Dk, Pk)")
+        self.tipo_q = tk.StringVar(value="Cuartil (Qk)")
+        self.k_q = tk.IntVar(value=1)
+        self.cmb_tipo = ttk.Combobox(self.frame_q, width=18, state="readonly",
+                                     values=["Cuartil (Qk)", "Decil (Dk)", "Percentil (Pk)"],
+                                     textvariable=self.tipo_q)
+        self.cmb_tipo.bind("<<ComboboxSelected>>", self._ajustar_rango_k)
+        self.sp_k = tk.Spinbox(self.frame_q, from_=1, to=3, width=6, textvariable=self.k_q, justify="center")
+        self.btn_calc_q = ttk.Button(self.frame_q, text="Calcular", command=self._calcular_cuantil)
+        self.lbl_q_res = ttk.Label(self.frame_q, text="Resultado: —", font=("Segoe UI", 10, "bold"))
+
+        # Resultados de texto
+        self.frame_res = ttk.LabelFrame(self, text="Resultados")
+        self.txt_res = tk.Text(self.frame_res, height=10, wrap="word", relief="flat",
+                               font=("Consolas", 10))
+        self.txt_res.configure(background="#ffffff", borderwidth=1)
+        self.scroll = ttk.Scrollbar(self.frame_res, command=self.txt_res.yview)
+        self.txt_res.configure(yscrollcommand=self.scroll.set)
 
     def _configurar_layout(self):
-        pad = {"padx": 8, "pady": 6}
+        pad = {"padx": 10, "pady": 8}
 
         # Entradas
         self.frame_in.grid(row=0, column=0, sticky="nsew", **pad)
-        ttk.Label(self.frame_in, text="Mín:").grid(row=0, column=0, sticky="e")
+        ttk.Label(self.frame_in, text="Mín:").grid(row=0, column=0, sticky="e", padx=(0,6))
         self.e_min.grid(row=0, column=1, sticky="w")
-        ttk.Label(self.frame_in, text="Máx:").grid(row=1, column=0, sticky="e")
+        ttk.Label(self.frame_in, text="Máx:").grid(row=1, column=0, sticky="e", padx=(0,6))
         self.e_max.grid(row=1, column=1, sticky="w")
-        ttk.Label(self.frame_in, text="fi:").grid(row=2, column=0, sticky="e")
+        ttk.Label(self.frame_in, text="fi (frecuencia absoluta):").grid(row=2, column=0, sticky="e", padx=(0,6))
         self.e_fi.grid(row=2, column=1, sticky="w")
-        self.btn_add.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.btn_add.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.btn_clear.grid(row=4, column=0, columnspan=2, sticky="ew")
 
         # Tabla
@@ -206,22 +275,37 @@ class App(tk.Tk):
         self.tree.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.btn_del.grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.btn_csv.grid(row=1, column=1, sticky="e", pady=(6, 0))
-
-        # Resultados
-        self.frame_ops.grid(row=1, column=0, columnspan=3, sticky="nsew", **pad)
-        self.btn_tabla.grid(row=0, column=0, sticky="w")
-        self.btn_pos.grid(row=0, column=1, sticky="w")
-        self.btn_disp.grid(row=0, column=2, sticky="w")
-        self.btn_plot.grid(row=0, column=3, sticky="w")
-        self.txt_res.grid(row=1, column=0, columnspan=4, sticky="nsew", pady=(8,0))
-
-        # Pesos de redimensionamiento
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
         self.frame_tabla.grid_rowconfigure(0, weight=1)
         self.frame_tabla.grid_columnconfigure(0, weight=1)
-        self.frame_ops.grid_rowconfigure(1, weight=1)
-        self.frame_ops.grid_columnconfigure(3, weight=1)
+
+        # Cuantiles
+        self.frame_q.grid(row=1, column=0, sticky="nsew", **pad)
+        ttk.Label(self.frame_q, text="Tipo:").grid(row=0, column=0, sticky="e")
+        self.cmb_tipo.grid(row=0, column=1, sticky="w")
+        ttk.Label(self.frame_q, text="k:").grid(row=1, column=0, sticky="e")
+        self.sp_k.grid(row=1, column=1, sticky="w")
+        self.btn_calc_q.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8,0))
+        self.lbl_q_res.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6,0))
+
+        # Botones de cálculos y gráficos
+        self.frame_ops.grid(row=1, column=1, sticky="nsew", **pad)
+        self.btn_tabla.grid(row=0, column=0, sticky="w")
+        self.btn_pos.grid(row=0, column=1, sticky="w", padx=(6,0))
+        self.btn_disp.grid(row=0, column=2, sticky="w", padx=(6,0))
+        self.btn_plot.grid(row=0, column=3, sticky="w", padx=(6,0))
+
+        # Resultados
+        self.frame_res.grid(row=1, column=2, sticky="nsew", **pad)
+        self.txt_res.grid(row=0, column=0, sticky="nsew")
+        self.scroll.grid(row=0, column=1, sticky="ns")
+        self.frame_res.grid_rowconfigure(0, weight=1)
+        self.frame_res.grid_columnconfigure(0, weight=1)
+
+        # Pesos generales
+        self.grid_columnconfigure(1, weight=2)
+        self.grid_columnconfigure(2, weight=2)
+        self.grid_rowconfigure(0, weight=2)
+        self.grid_rowconfigure(1, weight=3)
 
     # ---- Operaciones ----
     def _leer_campos(self) -> Optional[Clase]:
@@ -244,7 +328,6 @@ class App(tk.Tk):
         c = self._leer_campos()
         if not c:
             return
-        # Si hay selección, actualiza esa fila; si no, agrega al final.
         sel = self.tree.selection()
         if sel:
             idx = self.tree.index(sel[0])
@@ -285,10 +368,12 @@ class App(tk.Tk):
             self.tree.delete(i)
         filas, n = construir_tabla(self.clases) if self.clases else ([], 0)
         for f in filas:
-            self.tree.insert("", "end", values=(f["intervalo"], f["min"], f["max"], f["A"], f["fi"], f["Fi"]))
-        # Fila TOTAL (visual)
+            self.tree.insert("", "end", values=(
+                f["intervalo"], _fmt(f["min"]), _fmt(f["max"]), _fmt(f["A"]),
+                f["fi"], _fmt(f["hi"], 4), f["Fi"], _fmt(f["Hi"], 4)
+            ))
         if n > 0:
-            self.tree.insert("", "end", values=("TOTAL", "", "", "", n, n))
+            self.tree.insert("", "end", values=("TOTAL", "", "", "", n, _fmt(1.0, 4), n, _fmt(1.0, 4)))
 
     def _mostrar_posicion(self):
         if not self.clases:
@@ -302,12 +387,12 @@ class App(tk.Tk):
         q3 = cuantil_agrupado(self.clases, 3, 4)
         texto = (
             "--- Medidas de posición ---\n"
-            f"Media (x̄)  : {media:.6g}\n"
-            f"Mediana (Q2): {mediana:.6g}\n"
-            f"Moda        : {('%.6g' % moda) if moda is not None else 'N/A'}\n"
-            f"Q1          : {q1:.6g}\n"
-            f"Q2          : {q2:.6g}\n"
-            f"Q3          : {q3:.6g}\n"
+            f"Media (x̄)  : {_fmt(media)}\n"
+            f"Mediana (Q2): {_fmt(mediana)}\n"
+            f"Moda        : {_fmt(moda) if moda is not None else 'N/A'}\n"
+            f"Q1          : {_fmt(q1)}\n"
+            f"Q2          : {_fmt(q2)}\n"
+            f"Q3          : {_fmt(q3)}\n"
         )
         self._escribir_resultado(texto)
 
@@ -318,11 +403,11 @@ class App(tk.Tk):
         d = dispersion_agrupada(self.clases)
         texto = (
             "--- Medidas de dispersión ---\n"
-            f"Rango         : {d['rango']:.6g}\n"
-            f"Varianza (s²) : {d['var']:.6g}\n"
-            f"Desv. Est. (s): {d['sd']:.6g}\n"
-            f"IQR (Q3-Q1)   : {d['IQR']:.6g}\n"
-            f"CV (%)        : {d['CV%']:.6g}\n"
+            f"Rango         : {_fmt(d['rango'])}\n"
+            f"Varianza (s²) : {_fmt(d['var'])}\n"
+            f"Desv. Est. (s): {_fmt(d['sd'])}\n"
+            f"IQR (Q3-Q1)   : {_fmt(d['IQR'])}\n"
+            f"CV (%)        : {_fmt(d['CV%'])}\n"
         )
         self._escribir_resultado(texto)
 
@@ -338,7 +423,7 @@ class App(tk.Tk):
             return
         filas, n = construir_tabla(self.clases)
         # Añadimos fila TOTAL
-        filas.append({"intervalo": "TOTAL", "min": "", "max": "", "A": "", "fi": n, "Fi": n})
+        filas.append({"intervalo": "TOTAL", "min": "", "max": "", "A": "", "fi": n, "hi": 1.0, "Fi": n, "Hi": 1.0})
         ruta = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv")],
@@ -349,14 +434,14 @@ class App(tk.Tk):
             return
         with open(ruta, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
-            w.writerow(["Valores (Intervalo)", "Mín", "Máx", "A", "fi", "Fi"])
+            w.writerow(["Valores (Intervalo)", "Mín", "Máx", "A", "fi", "hi", "Fi", "Hi"])
             for f in filas:
-                w.writerow([f["intervalo"], f["min"], f["max"], f["A"], f["fi"], f["Fi"]])
+                w.writerow([f["intervalo"], f["min"], f["max"], f["A"], f["fi"], f["hi"], f["Fi"], f["Hi"]])
         messagebox.showinfo("Éxito", f"CSV guardado en:\n{ruta}")
 
     def _graficar(self):
         if not HAS_MPL:
-            messagebox.showinfo("Info", "Instala matplotlib para graficar:  python -m pip install matplotlib")
+            messagebox.showinfo("Info", "Instala matplotlib:  python -m pip install matplotlib")
             return
         if not self.clases:
             messagebox.showinfo("Info", "Primero ingresa las clases.")
@@ -381,6 +466,45 @@ class App(tk.Tk):
         plt.xlabel("Clase"); plt.ylabel("Fi")
         plt.tight_layout()
         plt.show()
+
+    # ---- Cuantiles (Qk, Dk, Pk) ----
+    def _ajustar_rango_k(self, _evt=None):
+        tipo = self.tipo_q.get()
+        if tipo.startswith("Cuartil"):
+            self.sp_k.config(from_=1, to=3)
+            if self.k_q.get() > 3: self.k_q.set(1)
+        elif tipo.startswith("Decil"):
+            self.sp_k.config(from_=1, to=9)
+            if self.k_q.get() > 9: self.k_q.set(1)
+        else:
+            self.sp_k.config(from_=1, to=99)
+            if self.k_q.get() > 99: self.k_q.set(1)
+
+    def _calcular_cuantil(self):
+        if not self.clases:
+            messagebox.showinfo("Info", "Primero ingresa las clases.")
+            return
+        k = self.k_q.get()
+        tipo = self.tipo_q.get()
+        if tipo.startswith("Cuartil"):
+            m, etiqueta = 4, "Q"
+        elif tipo.startswith("Decil"):
+            m, etiqueta = 10, "D"
+        else:
+            m, etiqueta = 100, "P"
+
+        valor = cuantil_agrupado(self.clases, k, m)
+        if math.isnan(valor):
+            self.lbl_q_res.config(text="Resultado: —")
+        else:
+            self.lbl_q_res.config(text=f"Resultado: {etiqueta}{k} = {_fmt(valor)}")
+
+# ---- util formateo ----
+def _fmt(x, dec=6):
+    try:
+        return f"{float(x):.{dec}g}"
+    except Exception:
+        return str(x)
 
 
 if __name__ == "__main__":
